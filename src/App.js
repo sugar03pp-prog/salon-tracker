@@ -292,6 +292,33 @@ export default function App() {
   function handleAddVisitForPerson(name, date, course, firstVisit) { setVisits(prev => [...prev, { id: Date.now(), name, date, course, firstVisit: firstVisit || false }]); }
   function toggleHistory(name) { setExpandedHistory(prev => ({ ...prev, [name]: !prev[name] })); }
   function toggleCycles(name) { setExpandedCycles(prev => ({ ...prev, [name]: !prev[name] })); }
+  function exportData() {
+    const data = {
+      visits: localStorage.getItem('salon_visits'),
+      past: localStorage.getItem('salon_past'),
+      customers: localStorage.getItem('salon_customers'),
+    };
+    const json = JSON.stringify(data);
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(json).then(() => alert('データをクリップボードにコピーしました！新しいアプリに貼り付けてください。'));
+    } else {
+      prompt('以下のデータをコピーしてください：', json);
+    }
+  }
+
+  function importData(json) {
+    try {
+      const data = JSON.parse(json);
+      if (data.visits) localStorage.setItem('salon_visits', data.visits);
+      if (data.past) localStorage.setItem('salon_past', data.past);
+      if (data.customers) localStorage.setItem('salon_customers', data.customers);
+      alert('インポート完了！ページを再読み込みします。');
+      window.location.reload();
+    } catch(e) {
+      alert('データの形式が正しくありません。');
+    }
+  }
+
   const tabStyle = (t) => ({ padding: "8px 14px", borderRadius: "8px 8px 0 0", border: "none", cursor: "pointer", fontWeight: 700, fontSize: 12, background: tab === t ? "#1e1e2e" : "transparent", color: tab === t ? "#a78bfa" : "#6b7280", borderBottom: tab === t ? "2px solid #a78bfa" : "2px solid transparent", transition: "all 0.2s", fontFamily: "inherit", whiteSpace: "nowrap" });
 
   return (
@@ -303,6 +330,19 @@ export default function App() {
             <div>
               <h1 style={{ margin: 0, fontSize: 20, fontWeight: 800 }}>顧客管理ダッシュボード</h1>
               <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>来店記録・周期・コース分析</p>
+            </div>
+            <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+              <button onClick={exportData}
+                style={{ background: "#16162a", border: "1px solid #374151", borderRadius: 8, padding: "5px 10px", color: "#9ca3af", fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>
+                📤 出力
+              </button>
+              <button onClick={() => {
+                const json = prompt('インポートするデータを貼り付けてください：');
+                if (json) importData(json);
+              }}
+                style={{ background: "#16162a", border: "1px solid #374151", borderRadius: 8, padding: "5px 10px", color: "#9ca3af", fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>
+                📥 入力
+              </button>
             </div>
           </div>
         </div>
