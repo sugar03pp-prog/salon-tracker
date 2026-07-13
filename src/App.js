@@ -219,6 +219,9 @@ export default function App() {
   const [pastData, setPastData] = useState(() => {
     try { const s = localStorage.getItem("salon_past"); return s ? JSON.parse(s) : {}; } catch { return {}; }
   });
+  const [ngData, setNgData] = useState(() => {
+    try { const s = localStorage.getItem("salon_ng"); return s ? JSON.parse(s) : {}; } catch { return {}; }
+  });
 
   useEffect(() => {
     try { localStorage.setItem("salon_visits", JSON.stringify(visits)); } catch {}
@@ -229,6 +232,17 @@ export default function App() {
   }, [pastData]);
 
   useEffect(() => {
+    try { localStorage.setItem("salon_ng", JSON.stringify(ngData)); } catch {}
+  }, [ngData]);
+
+  function setNG(name, date) {
+    setNgData(prev => ({ ...prev, [name]: { date } }));
+  }
+  function removeNG(name) {
+    setNgData(prev => { const n = { ...prev }; delete n[name]; return n; });
+  }
+
+  useEffect(() => {
     try { localStorage.setItem("salon_customers", JSON.stringify(registeredCustomers)); } catch {}
   }, [registeredCustomers]);
 
@@ -236,13 +250,20 @@ export default function App() {
     setPastData(prev => ({ ...prev, [name]: { ...(prev[name] || {}), [field]: value } }));
   }
 
+  // NG除外済みの来店データ（集計・分析用）
+  const activeVisits = useMemo(() => visits.filter(v => {
+    const ng = ngData[v.name];
+    if (!ng) return true;
+    return v.date < ng.date; // NG日より前の来店は含める（NG日以降は除外）
+  }), [visits, ngData]);
+
   const customers = useMemo(() => {
-    const fromVisits = visits.map(v => v.name);
-    return [...new Set([...registeredCustomers, ...fromVisits])].sort();
-  }, [visits, registeredCustomers]);
+    const fromVisits = activeVisits.map(v => v.name);
+    return [...new Set([...registeredCustomers.filter(n => !ngData[n]), ...fromVisits])].sort();
+  }, [activeVisits, registeredCustomers, ngData]);
 
   const personalStats = useMemo(() => customers.map(name => {
-    const myVisits = visits.filter(v => v.name === name).sort((a, b) => new Date(a.date) - new Date(b.date));
+    const myVisits = activeVisits.filter(v => v.name === name).sort((a, b) => new Date(a.date) - new Date(b.date));
     const cycle = avgCycleDays(myVisits);
     const courseCounts = {};
     myVisits.forEach(v => { courseCounts[v.course] = (courseCounts[v.course] || 0) + 1; });
@@ -264,17 +285,15 @@ export default function App() {
     const allCycles = personalStats.filter(p => p.cycle !== null).map(p => p.cycle);
     const avgCycle = allCycles.length ? Math.round(allCycles.reduce((a, b) => a + b, 0) / allCycles.length) : null;
     const courseCounts = {};
-    visits.forEach(v => { courseCounts[v.course] = (courseCounts[v.course] || 0) + 1; });
-    // 月別来店数
+    activeVisits.forEach(v => { courseCounts[v.course] = (courseCounts[v.course] || 0) + 1; });
     const monthCounts = {};
-    visits.forEach(v => {
+    activeVisits.forEach(v => {
       const m = v.date.slice(0, 7);
       monthCounts[m] = (monthCounts[m] || 0) + 1;
     });
     const months = Object.entries(monthCounts).sort((a, b) => a[0].localeCompare(b[0]));
-    // 要フォロー（直近来店から平均周期×1.5以上経過）
     const followUp = personalStats.filter(p => p.overdue).sort((a, b) => b.daysSinceLast - a.daysSinceLast);
-    return { avgCycle, courseCounts, total: visits.length, months, followUp };
+    return { avgCycle, courseCounts, total: activeVisits.length, months, followUp };
   }, [visits, personalStats]);
 
   function handleAdd() {
@@ -297,6 +316,7 @@ export default function App() {
       visits: localStorage.getItem('salon_visits'),
       past: localStorage.getItem('salon_past'),
       customers: localStorage.getItem('salon_customers'),
+      ng: localStorage.getItem('salon_ng'),
     };
     const json = JSON.stringify(data);
     if (navigator.clipboard) {
@@ -320,6 +340,10 @@ export default function App() {
       if (data.customers) {
         const customers = typeof data.customers === 'string' ? data.customers : JSON.stringify(data.customers);
         localStorage.setItem('salon_customers', customers);
+      }
+      if (data.ng) {
+        const ng = typeof data.ng === 'string' ? data.ng : JSON.stringify(data.ng);
+        localStorage.setItem('salon_ng', ng);
       }
       alert('インポート完了！ページを再読み込みします。');
       window.location.reload();
@@ -538,14 +562,28 @@ export default function App() {
                               delete next[oldName];
                               return next;
                             });
+                            setNgData(prev => {
+                              if (!prev[oldName]) return prev;
+                              const next = { ...prev, [newName]: prev[oldName] };
+                              delete next[oldName];
+                              return next;
+                            });
                             setNameSearch(newName);
                           }}
                         />
                         <div style={{ fontSize: 12, color: "#6b7280" }}>来店 {p.total} 回</div>
                       </div>
-                      <div style={{ marginLeft: "auto", textAlign: "right" }}>
-                        <div style={{ fontSize: 22, fontWeight: 800, color: p.cycle ? "#a78bfa" : "#4b5563" }}>{p.cycle ? `${p.cycle}日` : "—"}</div>
-                        <div style={{ fontSize: 11, color: "#6b7280" }}>平均来店周期</div>
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+                        <div style={{ textAlign: "right" }}>
+                          <div style={{ fontSize: 22, fontWeight: 800, color: p.cycle ? "#a78bfa" : "#4b5563" }}>{p.cycle ? `${p.cycle}日` : "—"}</div>
+                          <div style={{ fontSize: 11, color: "#6b7280" }}>平均来店周期</div>
+                        </div>
+                        <button onClick={() => {
+                          const date = prompt(`${p.name} をNGにする日付を入力（例: 2026-07-01）`);
+                          if (date) setNG(p.name, date);
+                        }} style={{ background: "#7f1d1d", border: "none", borderRadius: 6, padding: "3px 8px", color: "#f87171", fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>
+                          🚫 NG登録
+                        </button>
                       </div>
                     </div>
 
@@ -916,6 +954,25 @@ export default function App() {
                   </tbody>
                 </table>
               </div>
+
+              {/* NG顧客一覧 */}
+              {Object.keys(ngData).length > 0 && (
+                <div style={{ background: "#1a0f0f", borderRadius: 12, padding: 20, border: "1px solid #7f1d1d" }}>
+                  <h3 style={{ margin: "0 0 12px", fontSize: 14, color: "#f87171", fontWeight: 700 }}>🚫 NG顧客一覧</h3>
+                  {Object.entries(ngData).map(([name, info]) => (
+                    <div key={name} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid #2d1a1a" }}>
+                      <div>
+                        <span style={{ fontWeight: 700, fontSize: 14, color: "#f87171" }}>{name}</span>
+                        <span style={{ fontSize: 11, color: "#6b7280", marginLeft: 8 }}>NG日: {info.date}</span>
+                      </div>
+                      <button onClick={() => removeNG(name)}
+                        style={{ background: "#374151", border: "none", borderRadius: 6, padding: "4px 10px", color: "#9ca3af", fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>
+                        解除
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
