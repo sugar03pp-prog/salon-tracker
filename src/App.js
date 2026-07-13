@@ -309,13 +309,22 @@ export default function App() {
   function importData(json) {
     try {
       const data = JSON.parse(json);
-      if (data.visits) localStorage.setItem('salon_visits', data.visits);
-      if (data.past) localStorage.setItem('salon_past', data.past);
-      if (data.customers) localStorage.setItem('salon_customers', data.customers);
+      if (data.visits) {
+        const visits = typeof data.visits === 'string' ? data.visits : JSON.stringify(data.visits);
+        localStorage.setItem('salon_visits', visits);
+      }
+      if (data.past) {
+        const past = typeof data.past === 'string' ? data.past : JSON.stringify(data.past);
+        localStorage.setItem('salon_past', past);
+      }
+      if (data.customers) {
+        const customers = typeof data.customers === 'string' ? data.customers : JSON.stringify(data.customers);
+        localStorage.setItem('salon_customers', customers);
+      }
       alert('インポート完了！ページを再読み込みします。');
       window.location.reload();
     } catch(e) {
-      alert('データの形式が正しくありません。');
+      alert('データの形式が正しくありません: ' + e.message);
     }
   }
 
