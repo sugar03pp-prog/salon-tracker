@@ -1627,7 +1627,8 @@ export default function App() {
                               .reduce((s,v) => s + (COURSE_PRICES[v.course]?.pts||0), 0);
                             const allMonthKeys = Object.keys(monthMap).sort();
                             const prevIdx = allMonthKeys.indexOf(prevM);
-                            const consecutive3 = prevIdx >= 2 && allMonthKeys.slice(prevIdx-2, prevIdx+1).every(m => (monthMap[m]||[]).some(v => v.name === name));
+                            const consecutive3 = prevIdx >= 2 && allMonthKeys.slice(prevIdx-2, prevIdx+1).every(m => (monthMap[m]||[]).some(v => v.name === name))
+                              && ratio !== null && ratio >= 1; // 平均周期を超えている場合のみ
                             let status = null, statusColor = "#6b7280";
                             if (ratio !== null) {
                               if (ratio >= 2) { status = "危険"; statusColor = "#f87171"; }
@@ -1714,9 +1715,67 @@ export default function App() {
                           </div>
                         );
                       })()}
-                    </div>
-                  );
-                })}
+
+                      {/* 来店見込み客 */}
+                      {(() => {
+                        if (i >= monthStats.length - 1) return null;
+                        const prevS = monthStats[i + 1];
+                        const prevM = prevS.m;
+                        const targetVisitors = new Set((monthMap[s.m] || []).map(v => v.name));
+                        const prevVisitors = [...new Set((monthMap[prevM] || []).map(v => v.name))];
+                        const today_ = today();
+
+                        // 前月来店・今月未来店・周期未超過の人
+                        const expectedList = prevVisitors
+                          .filter(name => !targetVisitors.has(name) && !ngData[name])
+                          .map(name => {
+                            const allForName = visits.filter(v => v.name === name).sort((a,b) => new Date(a.date)-new Date(b.date));
+                            const cycle = avgCycleDays(allForName);
+                            const lastVisit = allForName[allForName.length - 1]?.date;
+                            if (!lastVisit || !cycle) return null;
+                            const daysSince = daysBetween(lastVisit, today_);
+                            const ratio = daysSince / cycle;
+                            if (ratio >= 1) return null; // 周期超過は除外
+                            const daysLeft = cycle - daysSince;
+                            return { name, cycle, lastVisit, daysSince, daysLeft, ratio };
+                          })
+                          .filter(Boolean)
+                          .sort((a,b) => a.daysLeft - b.daysLeft); // 来店が近い順
+
+                        if (expectedList.length === 0) return null;
+                        const isOpenExpected = expandedAbsent[s.m + '_expected'];
+
+                        return (
+                          <div style={{ marginTop: 10, borderTop: "1px solid #2d2d44", paddingTop: 10 }}>
+                            <button onClick={() => setExpandedAbsent(prev => ({ ...prev, [s.m + '_expected']: !prev[s.m + '_expected'] }))}
+                              style={{ width: "100%", background: "none", border: "none", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", padding: 0, fontFamily: "inherit" }}>
+                              <span style={{ fontSize: 12, fontWeight: 700, color: "#34d399" }}>
+                                🎯 来店見込み客 {expectedList.length}名
+                              </span>
+                              <span style={{ fontSize: 11, color: "#6b7280" }}>{isOpenExpected ? "▲" : "▼"}</span>
+                            </button>
+                            {isOpenExpected && (
+                              <div style={{ marginTop: 10 }}>
+                                {expectedList.map(p => (
+                                  <div key={p.name} style={{ padding: "8px 0", borderBottom: "1px solid #0f0f1a" }}>
+                                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                                      <span style={{ fontWeight: 700, fontSize: 13 }}>{p.name}</span>
+                                      <span style={{ fontSize: 12, fontWeight: 700, color: p.daysLeft <= 3 ? "#f59e0b" : "#34d399" }}>
+                                        あと{p.daysLeft}日
+                                      </span>
+                                    </div>
+                                    <div style={{ display: "flex", gap: 8, fontSize: 11, color: "#6b7280" }}>
+                                      <span>最終: {p.lastVisit}</span>
+                                      <span>{p.daysSince}日経過</span>
+                                      <span>周期: {p.cycle}日</span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
               </div>
             );
           })()}
