@@ -250,19 +250,21 @@ export default function App() {
     setPastData(prev => ({ ...prev, [name]: { ...(prev[name] || {}), [field]: value } }));
   }
 
-  // NG除外済みの来店データ（集計・分析用）
+  // NG除外済みの来店データ（集計・分析用）- NG日より前のデータは集計に含める
   const activeVisits = useMemo(() => visits.filter(v => {
     const ng = ngData[v.name];
     if (!ng) return true;
-    return v.date < ng.date; // NG日より前の来店は含める（NG日以降は除外）
+    return v.date < ng.date;
   }), [visits, ngData]);
 
+  // 顧客タブ用：NG顧客を完全除外した顧客リスト
   const customers = useMemo(() => {
-    const fromVisits = activeVisits.map(v => v.name);
+    const fromVisits = visits.filter(v => !ngData[v.name]).map(v => v.name);
     return [...new Set([...registeredCustomers.filter(n => !ngData[n]), ...fromVisits])].sort();
-  }, [activeVisits, registeredCustomers, ngData]);
+  }, [visits, registeredCustomers, ngData]);
 
   const personalStats = useMemo(() => customers.map(name => {
+    // 個人分析用：NG顧客は除外済みなので通常通り
     const myVisits = activeVisits.filter(v => v.name === name).sort((a, b) => new Date(a.date) - new Date(b.date));
     const cycle = avgCycleDays(myVisits);
     const courseCounts = {};
@@ -279,7 +281,7 @@ export default function App() {
     const pastCount = parseInt(past.pastCount || 0);
     const totalCount = myVisits.length + pastCount;
     return { name, visits: myVisits, cycle, courseCounts, topCourse, total: myVisits.length, lastVisit, nextVisit, daysSinceLast, overdue, totalClient, totalBack, firstDate, pastCount, totalCount };
-  }), [customers, visits, pastData]);
+  }), [customers, activeVisits, pastData]);
 
   const overallStats = useMemo(() => {
     const allCycles = personalStats.filter(p => p.cycle !== null).map(p => p.cycle);
