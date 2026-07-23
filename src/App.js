@@ -213,6 +213,9 @@ export default function App() {
   const [graphStart, setGraphStart] = useState("");
   const [graphEnd, setGraphEnd] = useState("");
   const [expandedAbsent, setExpandedAbsent] = useState({});
+  const [calendarYear, setCalendarYear] = useState(new Date().getFullYear());
+  const [calendarMonth, setCalendarMonth] = useState(new Date().getMonth());
+  const [selectedDay, setSelectedDay] = useState(null);
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
   // 過去データ: { "顧客名": { firstDate: "2021-09-03", pastCount: 42 } }
@@ -386,6 +389,7 @@ export default function App() {
           <button style={tabStyle("personal")} onClick={() => setTab("personal")}>👤 顧客</button>
           <button style={tabStyle("overall")} onClick={() => setTab("overall")}>📊 全体</button>
           <button style={tabStyle("period")} onClick={() => setTab("period")}>📅 期間</button>
+          <button style={tabStyle("daily")} onClick={() => setTab("daily")}>📆 日別</button>
           <button style={tabStyle("monthly")} onClick={() => setTab("monthly")}>📆 月別</button>
           <button style={tabStyle("graphs")} onClick={() => setTab("graphs")}>📈 グラフ</button>
           <button style={tabStyle("retention")} onClick={() => setTab("retention")}>🔍 リテンション</button>
@@ -977,6 +981,172 @@ export default function App() {
               )}
             </div>
           )}
+
+          {/* 日別カレンダータブ */}
+          {tab === "daily" && (() => {
+            const year = calendarYear;
+            const month = calendarMonth;
+            const firstDay = new Date(year, month, 1);
+            const lastDay = new Date(year, month + 1, 0);
+            const daysInMonth = lastDay.getDate();
+            // 月曜始まり: 月=0,火=1,...日=6
+            const startDow = (firstDay.getDay() + 6) % 7;
+            const weeks = ["月","火","水","木","金","土","日"];
+
+            // 日別データ集計
+            const dayMap = {};
+            activeVisits.forEach(v => {
+              if (!dayMap[v.date]) dayMap[v.date] = [];
+              dayMap[v.date].push(v);
+            });
+
+            const getDayStr = (d) => `${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+
+            const getDayStats = (dateStr) => {
+              const dayVisits = dayMap[dateStr] || [];
+              const frames = dayVisits.reduce((s,v) => s + (COURSE_PRICES[v.course]?.frames||0), 0);
+              const pts = dayVisits.filter(v => !v.firstVisit && activeVisits.some(prev => prev.name === v.name && prev.date < v.date))
+                .reduce((s,v) => s + (COURSE_PRICES[v.course]?.pts||0), 0);
+              const back = dayVisits.reduce((s,v) => s + calcPrices(v.course, v.firstVisit).back, 0);
+              return { dayVisits, frames, pts, back };
+            };
+
+            // 選択日の詳細
+            const selectedStats = selectedDay ? getDayStats(selectedDay) : null;
+
+            // カレンダーグリッド
+            const cells = [];
+            for (let i = 0; i < startDow; i++) cells.push(null);
+            for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+
+            const todayStr = today();
+
+            return (
+              <div>
+                {/* 月ナビゲーション */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                  <button onClick={() => { if (month === 0) { setCalendarMonth(11); setCalendarYear(y => y-1); } else setCalendarMonth(m => m-1); setSelectedDay(null); }}
+                    style={{ background: "#16162a", border: "1px solid #374151", borderRadius: 8, padding: "6px 14px", color: "#9ca3af", cursor: "pointer", fontSize: 16 }}>‹</button>
+                  <span style={{ fontSize: 16, fontWeight: 800, color: "#e2e8f0" }}>{year}年{month+1}月</span>
+                  <button onClick={() => { if (month === 11) { setCalendarMonth(0); setCalendarYear(y => y+1); } else setCalendarMonth(m => m+1); setSelectedDay(null); }}
+                    style={{ background: "#16162a", border: "1px solid #374151", borderRadius: 8, padding: "6px 14px", color: "#9ca3af", cursor: "pointer", fontSize: 16 }}>›</button>
+                </div>
+
+                {/* 月合計 */}
+                {(() => {
+                  const mStr = `${year}-${String(month+1).padStart(2,'0')}`;
+                  const mVisits = activeVisits.filter(v => v.date.startsWith(mStr));
+                  const mFrames = mVisits.reduce((s,v) => s + (COURSE_PRICES[v.course]?.frames||0), 0);
+                  const mPts = mVisits.filter(v => !v.firstVisit && activeVisits.some(prev => prev.name === v.name && prev.date < v.date))
+                    .reduce((s,v) => s + (COURSE_PRICES[v.course]?.pts||0), 0);
+                  const mBack = mVisits.reduce((s,v) => s + calcPrices(v.course, v.firstVisit).back, 0);
+                  return (
+                    <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                      {[
+                        { label: "総枠数", value: mFrames + "枠", color: "#f59e0b" },
+                        { label: "本指名PT", value: mPts + "pt", color: "#a78bfa" },
+                        { label: "給与", value: hideSalary ? "¥●●●" : fmt(mBack), color: "#34d399" },
+                      ].map(c => (
+                        <div key={c.label} style={{ flex: 1, background: "#16162a", borderRadius: 8, padding: "8px 10px", textAlign: "center", border: "1px solid #2d2d44" }}>
+                          <div style={{ fontSize: 9, color: "#6b7280", marginBottom: 2 }}>{c.label}</div>
+                          <div style={{ fontSize: 14, fontWeight: 800, color: c.color }}>{c.value}</div>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+
+                {/* カレンダー */}
+                <div style={{ background: "#16162a", borderRadius: 12, padding: 12, border: "1px solid #2d2d44", marginBottom: 16 }}>
+                  {/* 曜日ヘッダー */}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2, marginBottom: 4 }}>
+                    {weeks.map((w, i) => (
+                      <div key={w} style={{ textAlign: "center", fontSize: 10, color: i === 6 ? "#f87171" : i === 5 ? "#60a5fa" : "#6b7280", padding: "2px 0", fontWeight: 700 }}>{w}</div>
+                    ))}
+                  </div>
+                  {/* 日付グリッド */}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2 }}>
+                    {cells.map((d, idx) => {
+                      if (!d) return <div key={`empty-${idx}`} />;
+                      const dateStr = getDayStr(d);
+                      const { dayVisits, frames, pts, back } = getDayStats(dateStr);
+                      const hasVisit = dayVisits.length > 0;
+                      const isToday = dateStr === todayStr;
+                      const isSelected = dateStr === selectedDay;
+                      const dow = (idx) % 7;
+                      const isSun = dow === 6;
+                      const isSat = dow === 5;
+                      return (
+                        <div key={d} onClick={() => hasVisit && setSelectedDay(isSelected ? null : dateStr)}
+                          style={{
+                            borderRadius: 6, padding: "4px 2px", minHeight: 56, cursor: hasVisit ? "pointer" : "default",
+                            background: isSelected ? "#a78bfa33" : hasVisit ? "#1e1e2e" : "transparent",
+                            border: isToday ? "1px solid #a78bfa" : isSelected ? "1px solid #a78bfa" : "1px solid transparent",
+                            transition: "all 0.2s",
+                          }}>
+                          <div style={{ textAlign: "center", fontSize: 11, fontWeight: isToday ? 800 : 600,
+                            color: isToday ? "#a78bfa" : isSun ? "#f87171" : isSat ? "#60a5fa" : "#9ca3af", marginBottom: 2 }}>
+                            {d}
+                          </div>
+                          {hasVisit && (
+                            <div style={{ textAlign: "center" }}>
+                              <div style={{ fontSize: 9, color: "#f59e0b", fontWeight: 700 }}>{frames}枠</div>
+                              <div style={{ fontSize: 9, color: "#a78bfa" }}>{pts}pt</div>
+                              <div style={{ fontSize: 9, color: "#34d399" }}>{hideSalary ? "●●●" : `¥${Math.round(back/1000)}k`}</div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 選択日の詳細 */}
+                {selectedDay && selectedStats && (
+                  <div style={{ background: "#16162a", borderRadius: 12, padding: 20, border: "1px solid #2d2d44" }}>
+                    <h3 style={{ margin: "0 0 12px", fontSize: 14, color: "#a78bfa", fontWeight: 700 }}>{selectedDay}の来店詳細</h3>
+                    {/* 合計 */}
+                    <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+                      {[
+                        { label: "枠数", value: selectedStats.frames + "枠", color: "#f59e0b" },
+                        { label: "本指名PT", value: selectedStats.pts + "pt", color: "#a78bfa" },
+                        { label: "給与合計", value: hideSalary ? "¥●●●" : fmt(selectedStats.back), color: "#34d399" },
+                      ].map(c => (
+                        <div key={c.label} style={{ flex: 1, background: "#0f0f1a", borderRadius: 8, padding: "8px 10px", textAlign: "center" }}>
+                          <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 3 }}>{c.label}</div>
+                          <div style={{ fontSize: 16, fontWeight: 800, color: c.color }}>{c.value}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {/* 顧客別 */}
+                    {selectedStats.dayVisits.map(v => {
+                      const prices = calcPrices(v.course, v.firstVisit);
+                      const isHon = !v.firstVisit && activeVisits.some(prev => prev.name === v.name && prev.date < v.date);
+                      const vPts = isHon ? (COURSE_PRICES[v.course]?.pts || 0) : 0;
+                      return (
+                        <div key={v.id} style={{ padding: "10px 0", borderBottom: "1px solid #0f0f1a" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                            <div>
+                              <span style={{ fontWeight: 700, fontSize: 14 }}>{v.name}</span>
+                              {v.firstVisit && <span style={{ fontSize: 10, color: "#f59e0b", marginLeft: 6 }}>初指名</span>}
+                              {isHon && <span style={{ fontSize: 10, color: "#a78bfa", marginLeft: 6 }}>本指名</span>}
+                            </div>
+                            <span style={{ background: COURSE_COLORS[v.course] + "33", color: COURSE_COLORS[v.course], borderRadius: 5, padding: "2px 8px", fontSize: 12, fontWeight: 700 }}>{v.course}</span>
+                          </div>
+                          <div style={{ display: "flex", gap: 12, fontSize: 12 }}>
+                            <span style={{ color: "#f59e0b" }}>{COURSE_PRICES[v.course]?.frames || 0}枠</span>
+                            <span style={{ color: "#a78bfa" }}>{vPts}pt</span>
+                            <span style={{ color: "#34d399" }}>{hideSalary ? "¥●●●" : fmt(prices.client)}</span>
+                            <span style={{ color: "#a78bfa" }}>{hideSalary ? "¥●●●" : fmt(prices.back)}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* 期間分析タブ */}
           {tab === "period" && (
