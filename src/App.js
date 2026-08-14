@@ -55,10 +55,42 @@ const COURSE_PRICES = {
   "600分": { client: 360000, back: 222000, frames: 6, pts: 60 },
 };
 
-function calcPrices(course, isFirstVisit) {
+const NEW_RULE_DATE = "2026-08-15"; // この日以降は200分以上=1枠
+
+function getFrames(course, visitDate) {
+  const base = COURSE_PRICES[course];
+  if (!base) return 0;
+  if (visitDate >= NEW_RULE_DATE && base.frames >= 2) return 1;
+  return base.frames;
+}
+
+function getPts(course, visitDate) {
+  const base = COURSE_PRICES[course];
+  if (!base) return 0;
+  return base.pts;
+}
+
+const NEW_CLIENT_PRICE_DATE = "2026-08-01";
+const COURSE_COMBOS = {
+  "200分": {a:2,b:0}, "230分": {a:1,b:1}, "260分": {a:0,b:2},
+  "300分": {a:3,b:0}, "330分": {a:2,b:1}, "360分": {a:1,b:2},
+  "390分": {a:0,b:3}, "400分": {a:4,b:0}, "430分": {a:3,b:1},
+  "460分": {a:2,b:2}, "490分": {a:1,b:3}, "500分": {a:5,b:0},
+  "520分": {a:0,b:4}, "530分": {a:4,b:1}, "600分": {a:6,b:0},
+};
+
+function calcPrices(course, isFirstVisit, visitDate) {
   const base = COURSE_PRICES[course];
   if (!base) return { client: 0, back: 0 };
-  const client = base.client;
+  let client = base.client;
+  if (visitDate && visitDate >= NEW_CLIENT_PRICE_DATE) {
+    if (course === "100分") client = 64000;
+    else if (course === "130分") client = 85000;
+    else {
+      const combo = COURSE_COMBOS[course];
+      if (combo) client = combo.a * 64000 + combo.b * 85000;
+    }
+  }
   const backRaw = base.back - (isFirstVisit ? 2000 : 0);
   const back = Math.round(backRaw * 0.9);
   return { client, back };
@@ -116,7 +148,7 @@ function VisitHistoryEditor({ visits, onUpdate, onDelete, onAdd, personName, hid
           </tr></thead>
           <tbody>
             {[...sorted].reverse().map((v, i) => {
-              const prices = calcPrices(v.course, v.firstVisit);
+              const prices = calcPrices(v.course, v.firstVisit, v.date);
               if (editingId === v.id) {
                 return (
                   <tr key={v.id}>
@@ -277,8 +309,8 @@ export default function App() {
     const nextVisit = lastVisit && cycle ? addDays(lastVisit, cycle) : null;
     const daysSinceLast = lastVisit ? daysBetween(lastVisit, today()) : null;
     const overdue = cycle && daysSinceLast ? daysSinceLast > cycle * 1.5 : false;
-    const totalClient = myVisits.reduce((sum, v) => sum + calcPrices(v.course, v.firstVisit).client, 0);
-    const totalBack = myVisits.reduce((sum, v) => sum + calcPrices(v.course, v.firstVisit).back, 0);
+    const totalClient = myVisits.reduce((sum, v) => sum + calcPrices(v.course, v.firstVisit, v.date).client, 0);
+    const totalBack = myVisits.reduce((sum, v) => sum + calcPrices(v.course, v.firstVisit, v.date).back, 0);
     const past = pastData[name] || {};
     const firstDate = past.firstDate || (myVisits.length ? myVisits[0].date : null);
     const pastCount = parseInt(past.pastCount || 0);
@@ -455,7 +487,7 @@ export default function App() {
                         初指名（-¥2,000）
                       </label>
                       {(() => {
-                        const p = calcPrices(form.course, form.firstVisit);
+                        const p = calcPrices(form.course, form.firstVisit, form.date);
                         return (
                           <div style={{ fontSize: 11, color: "#6b7280", lineHeight: 1.6 }}>
                             客払 <span style={{ color: "#34d399", fontWeight: 700 }}>{fmt(p.client)}</span>　給与 <span style={{ color: "#a78bfa", fontWeight: 700 }}>{fmt(p.back)}</span>
@@ -486,7 +518,7 @@ export default function App() {
                   <div style={{ background: "#16162a", borderRadius: 10, padding: "14px 16px", border: "1px solid #2d2d44" }}>
                     <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 10 }}>{form.name} の直近来店</div>
                     {recentVisits.map(v => {
-                      const p = calcPrices(v.course, v.firstVisit);
+                      const p = calcPrices(v.course, v.firstVisit, v.date);
                       return (
                         <div key={v.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px solid #0f0f1a" }}>
                           <div style={{ fontSize: 12, color: "#9ca3af" }}>{v.date}{v.firstVisit && <span style={{ marginLeft: 4, fontSize: 10, color: "#f59e0b" }}>初</span>}</div>
@@ -847,7 +879,7 @@ export default function App() {
                       const m = v.date.slice(0,7);
                       if (!monthData[m]) monthData[m] = { count: 0, back: 0 };
                       monthData[m].count++;
-                      monthData[m].back += calcPrices(v.course, v.firstVisit).back;
+                      monthData[m].back += calcPrices(v.course, v.firstVisit, v.date).back;
                     });
                     const months = Object.entries(monthData).sort((a,b) => a[0].localeCompare(b[0]));
                     const maxCount = Math.max(...months.map(m => m[1].count));
@@ -1004,10 +1036,10 @@ export default function App() {
 
             const getDayStats = (dateStr) => {
               const dayVisits = dayMap[dateStr] || [];
-              const frames = dayVisits.reduce((s,v) => s + (COURSE_PRICES[v.course]?.frames||0), 0);
+              const frames = dayVisits.reduce((s,v) => s + (getFrames(v.course, v.date)), 0);
               const pts = dayVisits.filter(v => !v.firstVisit && activeVisits.some(prev => prev.name === v.name && prev.date < v.date))
-                .reduce((s,v) => s + (COURSE_PRICES[v.course]?.pts||0), 0);
-              const back = dayVisits.reduce((s,v) => s + calcPrices(v.course, v.firstVisit).back, 0);
+                .reduce((s,v) => s + (getPts(v.course, v.date)), 0);
+              const back = dayVisits.reduce((s,v) => s + calcPrices(v.course, v.firstVisit, v.date).back, 0);
               return { dayVisits, frames, pts, back };
             };
 
@@ -1036,10 +1068,10 @@ export default function App() {
                 {(() => {
                   const mStr = `${year}-${String(month+1).padStart(2,'0')}`;
                   const mVisits = activeVisits.filter(v => v.date.startsWith(mStr));
-                  const mFrames = mVisits.reduce((s,v) => s + (COURSE_PRICES[v.course]?.frames||0), 0);
+                  const mFrames = mVisits.reduce((s,v) => s + (getFrames(v.course, v.date)), 0);
                   const mPts = mVisits.filter(v => !v.firstVisit && activeVisits.some(prev => prev.name === v.name && prev.date < v.date))
-                    .reduce((s,v) => s + (COURSE_PRICES[v.course]?.pts||0), 0);
-                  const mBack = mVisits.reduce((s,v) => s + calcPrices(v.course, v.firstVisit).back, 0);
+                    .reduce((s,v) => s + (getPts(v.course, v.date)), 0);
+                  const mBack = mVisits.reduce((s,v) => s + calcPrices(v.course, v.firstVisit, v.date).back, 0);
                   return (
                     <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
                       {[
@@ -1120,9 +1152,9 @@ export default function App() {
                     </div>
                     {/* 顧客別 */}
                     {selectedStats.dayVisits.map(v => {
-                      const prices = calcPrices(v.course, v.firstVisit);
+                      const prices = calcPrices(v.course, v.firstVisit, v.date);
                       const isHon = !v.firstVisit && activeVisits.some(prev => prev.name === v.name && prev.date < v.date);
-                      const vPts = isHon ? (COURSE_PRICES[v.course]?.pts || 0) : 0;
+                      const vPts = isHon ? (getPts(v.course, v.date)) : 0;
                       return (
                         <div key={v.id} style={{ padding: "10px 0", borderBottom: "1px solid #0f0f1a" }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
@@ -1134,7 +1166,7 @@ export default function App() {
                             <span style={{ background: COURSE_COLORS[v.course] + "33", color: COURSE_COLORS[v.course], borderRadius: 5, padding: "2px 8px", fontSize: 12, fontWeight: 700 }}>{v.course}</span>
                           </div>
                           <div style={{ display: "flex", gap: 12, fontSize: 12 }}>
-                            <span style={{ color: "#f59e0b" }}>{COURSE_PRICES[v.course]?.frames || 0}枠</span>
+                            <span style={{ color: "#f59e0b" }}>{getFrames(v.course, v.date)}枠</span>
                             <span style={{ color: "#a78bfa" }}>{vPts}pt</span>
                             <span style={{ color: "#34d399" }}>{hideSalary ? "¥●●●" : fmt(prices.client)}</span>
                             <span style={{ color: "#a78bfa" }}>{hideSalary ? "¥●●●" : fmt(prices.back)}</span>
@@ -1196,8 +1228,8 @@ export default function App() {
                 const prevEndStr = prevEnd.toISOString().slice(0,10);
                 const inPrevPeriod = visits.filter(v => v.date >= prevStartStr && v.date <= prevEndStr);
                 const prevTotal = inPrevPeriod.length;
-                const prevClient = inPrevPeriod.reduce((s,v) => s + calcPrices(v.course, v.firstVisit).client, 0);
-                const prevBack = inPrevPeriod.reduce((s,v) => s + calcPrices(v.course, v.firstVisit).back, 0);
+                const prevClient = inPrevPeriod.reduce((s,v) => s + calcPrices(v.course, v.firstVisit, v.date).client, 0);
+                const prevBack = inPrevPeriod.reduce((s,v) => s + calcPrices(v.course, v.firstVisit, v.date).back, 0);
 
                 if (total === 0) return (
                   <div style={{ textAlign: "center", color: "#4b5563", padding: 40, fontSize: 14 }}>この期間の来店データがありません</div>
@@ -1215,11 +1247,11 @@ export default function App() {
                 const existVisits = inPeriod.filter(v => visits.some(prev => prev.name === v.name && prev.date < v.date));
 
                 // 金額集計
-                const totalClient = inPeriod.reduce((sum, v) => sum + calcPrices(v.course, v.firstVisit).client, 0);
-                const totalBack = inPeriod.reduce((sum, v) => sum + calcPrices(v.course, v.firstVisit).back, 0);
+                const totalClient = inPeriod.reduce((sum, v) => sum + calcPrices(v.course, v.firstVisit, v.date).client, 0);
+                const totalBack = inPeriod.reduce((sum, v) => sum + calcPrices(v.course, v.firstVisit, v.date).back, 0);
 
                 // 枠数集計
-                const totalFrames = inPeriod.reduce((sum, v) => sum + (COURSE_PRICES[v.course]?.frames || 0), 0);
+                const totalFrames = inPeriod.reduce((sum, v) => sum + (getFrames(v.course, v.date)), 0);
 
                 // 本指名ポイント（初指名除く・その来店日より前に来店歴がある顧客のみ）
                 const totalPts = inPeriod
@@ -1227,7 +1259,7 @@ export default function App() {
                     if (v.firstVisit) return false;
                     return visits.some(prev => prev.name === v.name && prev.date < v.date);
                   })
-                  .reduce((sum, v) => sum + (COURSE_PRICES[v.course]?.pts || 0), 0);
+                  .reduce((sum, v) => sum + (getPts(v.course, v.date)), 0);
 
                 // 複数回来店した人
                 const visitCountByName = {};
@@ -1254,7 +1286,7 @@ export default function App() {
                             if (v.firstVisit) return false;
                             return visits.some(prev => prev.name === v.name && prev.date < v.date);
                           })
-                          .reduce((sum, v) => sum + (COURSE_PRICES[v.course]?.frames || 0), 0);
+                          .reduce((sum, v) => sum + (getFrames(v.course, v.date)), 0);
                         return [
                           { label: "来店客数", value: uniqueNames.length + "名", icon: "👥", color: "#ec4899", sub: [
                               { label: "新規", value: newCustomers.length + "名", color: "#34d399" },
@@ -1362,8 +1394,8 @@ export default function App() {
                         </div>
                       </div>
                       {(() => {
-                        const newFrames = newVisits.reduce((sum, v) => sum + (COURSE_PRICES[v.course]?.frames || 0), 0);
-                        const existFrames = existVisits.reduce((sum, v) => sum + (COURSE_PRICES[v.course]?.frames || 0), 0);
+                        const newFrames = newVisits.reduce((sum, v) => sum + (getFrames(v.course, v.date)), 0);
+                        const existFrames = existVisits.reduce((sum, v) => sum + (getFrames(v.course, v.date)), 0);
                         const totalF = newFrames + existFrames;
                         return (
                           <>
@@ -1439,14 +1471,14 @@ export default function App() {
                             <div style={{ fontSize: 10, color: "#4b5563", textAlign: "center" }}>本指名PT</div>
                             {days.map(([date, dayVisits]) => {
                               const people = [...new Set(dayVisits.map(v => v.name))].length;
-                              const frames = dayVisits.reduce((s, v) => s + (COURSE_PRICES[v.course]?.frames || 0), 0);
+                              const frames = dayVisits.reduce((s, v) => s + (getFrames(v.course, v.date)), 0);
                               const pts = dayVisits
                                 .filter(v => {
                                   if (v.firstVisit) return false;
                                   // その日より前に来店歴があるか
                                   return visits.some(prev => prev.name === v.name && prev.date < date);
                                 })
-                                .reduce((s, v) => s + (COURSE_PRICES[v.course]?.pts || 0), 0);
+                                .reduce((s, v) => s + (getPts(v.course, v.date)), 0);
                               return (
                                 <React.Fragment key={date}>
                                   <div style={{ fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{date}</div>
@@ -1499,8 +1531,8 @@ export default function App() {
                       {(() => {
                         const ranked = uniqueNames.map(name => {
                           const theirVisits = inPeriod.filter(v => v.name === name);
-                          const client = theirVisits.reduce((s,v) => s + calcPrices(v.course, v.firstVisit).client, 0);
-                          const back = theirVisits.reduce((s,v) => s + calcPrices(v.course, v.firstVisit).back, 0);
+                          const client = theirVisits.reduce((s,v) => s + calcPrices(v.course, v.firstVisit, v.date).client, 0);
+                          const back = theirVisits.reduce((s,v) => s + calcPrices(v.course, v.firstVisit, v.date).back, 0);
                           const firstVisitDate = theirVisits.sort((a,b) => new Date(a.date)-new Date(b.date))[0]?.date || "";
                           return { name, client, back, count: theirVisits.length, firstVisitDate };
                         }).sort((a,b) => b.client - a.client || a.firstVisitDate.localeCompare(b.firstVisitDate));
@@ -1601,13 +1633,13 @@ export default function App() {
               // 来店単位の新規/既存枠数
               const mvNewVisits = mv.filter(v => !visits.some(prev => prev.name === v.name && prev.date < v.date));
               const mvExistVisits = mv.filter(v => visits.some(prev => prev.name === v.name && prev.date < v.date));
-              const frames = mv.reduce((s,v) => s + (COURSE_PRICES[v.course]?.frames || 0), 0);
+              const frames = mv.reduce((s,v) => s + (getFrames(v.course, v.date)), 0);
               const pts = mv.filter(v => {
                 if (v.firstVisit) return false;
                 return visits.some(prev => prev.name === v.name && prev.date < v.date);
-              }).reduce((s,v) => s + (COURSE_PRICES[v.course]?.pts || 0), 0);
-              const client = mv.reduce((s,v) => s + calcPrices(v.course, v.firstVisit).client, 0);
-              const back = mv.reduce((s,v) => s + calcPrices(v.course, v.firstVisit).back, 0);
+              }).reduce((s,v) => s + (getPts(v.course, v.date)), 0);
+              const client = mv.reduce((s,v) => s + calcPrices(v.course, v.firstVisit, v.date).client, 0);
+              const back = mv.reduce((s,v) => s + calcPrices(v.course, v.firstVisit, v.date).back, 0);
               // 来店回数別（その月にN回目来店した人数）
               const nthCounts = { 1: new Set(), 2: new Set(), 3: new Set(), 4: new Set(), "5+": new Set() };
               mv.forEach(v => {
@@ -1661,8 +1693,9 @@ export default function App() {
 
                       {/* 数値グリッド */}
                       {(() => {
-                        const mvNewFrames = monthMap[s.m].filter(v => !visits.some(prev => prev.name === v.name && prev.date < v.date)).reduce((sum,v) => sum + (COURSE_PRICES[v.course]?.frames||0), 0);
+                        const mvNewFrames = monthMap[s.m].filter(v => !visits.some(prev => prev.name === v.name && prev.date < v.date)).reduce((sum,v) => sum + (getFrames(v.course, v.date)), 0);
                         const mvExistFrames = s.frames - mvNewFrames;
+                        const honRate = s.frames > 0 ? Math.round(mvExistFrames / s.frames * 100) : 0;
                         const cards = [
                           { label: "来店客数", value: s.people + "名", color: "#ec4899", sub: [
                             { label: "新規", value: s.newCount + "名", color: "#34d399" },
@@ -1672,6 +1705,7 @@ export default function App() {
                             { label: "新規", value: mvNewFrames + "枠", color: "#34d399" },
                             { label: "本指名", value: mvExistFrames + "枠", color: "#a78bfa" },
                           ]},
+                          { label: "本指名率（枠数）", value: honRate + "%", color: honRate >= 70 ? "#34d399" : honRate >= 50 ? "#f59e0b" : "#f87171" },
                           { label: "本指名PT", value: s.pts + "pt", color: "#a78bfa" },
                           { label: "給与", value: hideSalary ? "¥●●●,●●●" : fmt(s.back), color: "#34d399",
                             sub: diffBack !== null ? [{ label: diffBack >= 0 ? "▲前月比" : "▼前月比", value: hideSalary ? "●●●" : fmt(Math.abs(diffBack)), color: diffBack >= 0 ? "#34d399" : "#f87171" }] : null },
@@ -1694,6 +1728,28 @@ export default function App() {
                                 )}
                               </div>
                             ))}
+                          </div>
+                        );
+                      })()}
+
+                      {/* コース別件数 */}
+                      {(() => {
+                        const mv = monthMap[s.m] || [];
+                        const courseCounts = {};
+                        mv.forEach(v => { courseCounts[v.course] = (courseCounts[v.course] || 0) + 1; });
+                        const sorted = Object.entries(courseCounts).sort((a,b) => b[1] - a[1]);
+                        if (sorted.length === 0) return null;
+                        return (
+                          <div style={{ background: "#0f0f1a", borderRadius: 8, padding: "10px 12px", marginTop: 10 }}>
+                            <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 8 }}>コース別件数</div>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                              {sorted.map(([course, count]) => (
+                                <div key={course} style={{ display: "flex", alignItems: "center", gap: 4, background: COURSE_COLORS[course] + "22", borderRadius: 6, padding: "3px 8px" }}>
+                                  <span style={{ fontSize: 12, fontWeight: 700, color: COURSE_COLORS[course] }}>{course}</span>
+                                  <span style={{ fontSize: 12, color: "#9ca3af" }}>{count}件</span>
+                                </div>
+                              ))}
+                            </div>
                           </div>
                         );
                       })()}
@@ -1741,7 +1797,7 @@ export default function App() {
                         const existPct = 100 - newPct;
                         const mv = monthMap[s.m];
                         const newFrames = mv.filter(v => !visits.some(prev => prev.name === v.name && prev.date < v.date))
-                          .reduce((sum,v) => sum + (COURSE_PRICES[v.course]?.frames || 0), 0);
+                          .reduce((sum,v) => sum + (getFrames(v.course, v.date)), 0);
                         const existFrames = s.frames - newFrames;
                         const newFPct = s.frames > 0 ? Math.round(newFrames / s.frames * 100) : 0;
                         const existFPct = 100 - newFPct;
@@ -1792,9 +1848,9 @@ export default function App() {
                             const daysSince = daysBetween(lastVisit, today_);
                             const ratio = cycle ? Math.round(daysSince / cycle * 10) / 10 : null;
                             const prevVisitsForName = (monthMap[prevM] || []).filter(v => v.name === name);
-                            const prevFrames = prevVisitsForName.reduce((s,v) => s + (COURSE_PRICES[v.course]?.frames||0), 0);
+                            const prevFrames = prevVisitsForName.reduce((s,v) => s + (getFrames(v.course, v.date)), 0);
                             const prevPts = prevVisitsForName.filter(v => !v.firstVisit && visits.some(prev => prev.name === v.name && prev.date < v.date))
-                              .reduce((s,v) => s + (COURSE_PRICES[v.course]?.pts||0), 0);
+                              .reduce((s,v) => s + (getPts(v.course, v.date)), 0);
                             const allMonthKeys = Object.keys(monthMap).sort();
                             const prevIdx = allMonthKeys.indexOf(prevM);
                             const consecutive3 = prevIdx >= 2 && allMonthKeys.slice(prevIdx-2, prevIdx+1).every(m => (monthMap[m]||[]).some(v => v.name === name))
@@ -1975,7 +2031,7 @@ export default function App() {
               const pts = mv.filter(v => {
                 if (v.firstVisit) return false;
                 return visits.some(prev => prev.name === v.name && prev.date < v.date);
-              }).reduce((s,v) => s + (COURSE_PRICES[v.course]?.pts || 0), 0);
+              }).reduce((s,v) => s + (getPts(v.course, v.date)), 0);
               return { m, people: uniqueN.length, newCount: newC.length, honshimei, pts };
             });
 
