@@ -55,7 +55,21 @@ const COURSE_PRICES = {
   "600分": { client: 360000, back: 222000, frames: 6, pts: 60 },
 };
 
-function calcPrices(course, isFirstVisit) {
+const NEW_RULE_DATE = "2026-08-15"; // この日以降は200分以上=1枠
+
+function getFrames(course, visitDate) {
+  const base = COURSE_PRICES[course];
+  if (!base) return 0;
+  if (visitDate >= NEW_RULE_DATE && base.frames >= 2) return 1;
+  return base.frames;
+}
+
+function getPts(course, visitDate) {
+  const base = COURSE_PRICES[course];
+  if (!base) return 0;
+  // PTは新ルールでも変わらず
+  return base.pts;
+}
   const base = COURSE_PRICES[course];
   if (!base) return { client: 0, back: 0 };
   const client = base.client;
@@ -213,11 +227,17 @@ export default function App() {
   const [graphStart, setGraphStart] = useState("");
   const [graphEnd, setGraphEnd] = useState("");
   const [expandedAbsent, setExpandedAbsent] = useState({});
+  const [calendarYear, setCalendarYear] = useState(new Date().getFullYear());
+  const [calendarMonth, setCalendarMonth] = useState(new Date().getMonth());
+  const [selectedDay, setSelectedDay] = useState(null);
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
   // 過去データ: { "顧客名": { firstDate: "2021-09-03", pastCount: 42 } }
   const [pastData, setPastData] = useState(() => {
     try { const s = localStorage.getItem("salon_past"); return s ? JSON.parse(s) : {}; } catch { return {}; }
+  });
+  const [ngData, setNgData] = useState(() => {
+    try { const s = localStorage.getItem("salon_ng"); return s ? JSON.parse(s) : {}; } catch { return {}; }
   });
 
   useEffect(() => {
@@ -229,6 +249,17 @@ export default function App() {
   }, [pastData]);
 
   useEffect(() => {
+    try { localStorage.setItem("salon_ng", JSON.stringify(ngData)); } catch {}
+  }, [ngData]);
+
+  function setNG(name, date) {
+    setNgData(prev => ({ ...prev, [name]: { date } }));
+  }
+  function removeNG(name) {
+    setNgData(prev => { const n = { ...prev }; delete n[name]; return n; });
+  }
+
+  useEffect(() => {
     try { localStorage.setItem("salon_customers", JSON.stringify(registeredCustomers)); } catch {}
   }, [registeredCustomers]);
 
@@ -236,13 +267,22 @@ export default function App() {
     setPastData(prev => ({ ...prev, [name]: { ...(prev[name] || {}), [field]: value } }));
   }
 
+  // NG除外済みの来店データ（集計・分析用）- NG日より前のデータは集計に含める
+  const activeVisits = useMemo(() => visits.filter(v => {
+    const ng = ngData[v.name];
+    if (!ng) return true;
+    return v.date < ng.date;
+  }), [visits, ngData]);
+
+  // 顧客タブ用：NG顧客を完全除外した顧客リスト
   const customers = useMemo(() => {
-    const fromVisits = visits.map(v => v.name);
-    return [...new Set([...registeredCustomers, ...fromVisits])].sort();
-  }, [visits, registeredCustomers]);
+    const fromVisits = visits.filter(v => !ngData[v.name]).map(v => v.name);
+    return [...new Set([...registeredCustomers.filter(n => !ngData[n]), ...fromVisits])].sort();
+  }, [visits, registeredCustomers, ngData]);
 
   const personalStats = useMemo(() => customers.map(name => {
-    const myVisits = visits.filter(v => v.name === name).sort((a, b) => new Date(a.date) - new Date(b.date));
+    // 個人分析用：NG顧客は除外済みなので通常通り
+    const myVisits = activeVisits.filter(v => v.name === name).sort((a, b) => new Date(a.date) - new Date(b.date));
     const cycle = avgCycleDays(myVisits);
     const courseCounts = {};
     myVisits.forEach(v => { courseCounts[v.course] = (courseCounts[v.course] || 0) + 1; });
@@ -258,23 +298,21 @@ export default function App() {
     const pastCount = parseInt(past.pastCount || 0);
     const totalCount = myVisits.length + pastCount;
     return { name, visits: myVisits, cycle, courseCounts, topCourse, total: myVisits.length, lastVisit, nextVisit, daysSinceLast, overdue, totalClient, totalBack, firstDate, pastCount, totalCount };
-  }), [customers, visits, pastData]);
+  }), [customers, activeVisits, pastData]);
 
   const overallStats = useMemo(() => {
     const allCycles = personalStats.filter(p => p.cycle !== null).map(p => p.cycle);
     const avgCycle = allCycles.length ? Math.round(allCycles.reduce((a, b) => a + b, 0) / allCycles.length) : null;
     const courseCounts = {};
-    visits.forEach(v => { courseCounts[v.course] = (courseCounts[v.course] || 0) + 1; });
-    // 月別来店数
+    activeVisits.forEach(v => { courseCounts[v.course] = (courseCounts[v.course] || 0) + 1; });
     const monthCounts = {};
-    visits.forEach(v => {
+    activeVisits.forEach(v => {
       const m = v.date.slice(0, 7);
       monthCounts[m] = (monthCounts[m] || 0) + 1;
     });
     const months = Object.entries(monthCounts).sort((a, b) => a[0].localeCompare(b[0]));
-    // 要フォロー（直近来店から平均周期×1.5以上経過）
     const followUp = personalStats.filter(p => p.overdue).sort((a, b) => b.daysSinceLast - a.daysSinceLast);
-    return { avgCycle, courseCounts, total: visits.length, months, followUp };
+    return { avgCycle, courseCounts, total: activeVisits.length, months, followUp };
   }, [visits, personalStats]);
 
   function handleAdd() {
@@ -292,6 +330,47 @@ export default function App() {
   function handleAddVisitForPerson(name, date, course, firstVisit) { setVisits(prev => [...prev, { id: Date.now(), name, date, course, firstVisit: firstVisit || false }]); }
   function toggleHistory(name) { setExpandedHistory(prev => ({ ...prev, [name]: !prev[name] })); }
   function toggleCycles(name) { setExpandedCycles(prev => ({ ...prev, [name]: !prev[name] })); }
+  function exportData() {
+    const data = {
+      visits: localStorage.getItem('salon_visits'),
+      past: localStorage.getItem('salon_past'),
+      customers: localStorage.getItem('salon_customers'),
+      ng: localStorage.getItem('salon_ng'),
+    };
+    const json = JSON.stringify(data);
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(json).then(() => alert('データをクリップボードにコピーしました！新しいアプリに貼り付けてください。'));
+    } else {
+      prompt('以下のデータをコピーしてください：', json);
+    }
+  }
+
+  function importData(json) {
+    try {
+      const data = JSON.parse(json);
+      if (data.visits) {
+        const visits = typeof data.visits === 'string' ? data.visits : JSON.stringify(data.visits);
+        localStorage.setItem('salon_visits', visits);
+      }
+      if (data.past) {
+        const past = typeof data.past === 'string' ? data.past : JSON.stringify(data.past);
+        localStorage.setItem('salon_past', past);
+      }
+      if (data.customers) {
+        const customers = typeof data.customers === 'string' ? data.customers : JSON.stringify(data.customers);
+        localStorage.setItem('salon_customers', customers);
+      }
+      if (data.ng) {
+        const ng = typeof data.ng === 'string' ? data.ng : JSON.stringify(data.ng);
+        localStorage.setItem('salon_ng', ng);
+      }
+      alert('インポート完了！ページを再読み込みします。');
+      window.location.reload();
+    } catch(e) {
+      alert('データの形式が正しくありません: ' + e.message);
+    }
+  }
+
   const tabStyle = (t) => ({ padding: "8px 14px", borderRadius: "8px 8px 0 0", border: "none", cursor: "pointer", fontWeight: 700, fontSize: 12, background: tab === t ? "#1e1e2e" : "transparent", color: tab === t ? "#a78bfa" : "#6b7280", borderBottom: tab === t ? "2px solid #a78bfa" : "2px solid transparent", transition: "all 0.2s", fontFamily: "inherit", whiteSpace: "nowrap" });
 
   return (
@@ -304,6 +383,19 @@ export default function App() {
               <h1 style={{ margin: 0, fontSize: 20, fontWeight: 800 }}>顧客管理ダッシュボード</h1>
               <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>来店記録・周期・コース分析</p>
             </div>
+            <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+              <button onClick={exportData}
+                style={{ background: "#16162a", border: "1px solid #374151", borderRadius: 8, padding: "5px 10px", color: "#9ca3af", fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>
+                📤 出力
+              </button>
+              <button onClick={() => {
+                const json = prompt('インポートするデータを貼り付けてください：');
+                if (json) importData(json);
+              }}
+                style={{ background: "#16162a", border: "1px solid #374151", borderRadius: 8, padding: "5px 10px", color: "#9ca3af", fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>
+                📥 入力
+              </button>
+            </div>
           </div>
         </div>
         <div style={{ display: "flex", gap: 4, marginTop: 24, borderBottom: "1px solid #2d2d44", overflowX: "auto" }}>
@@ -311,6 +403,7 @@ export default function App() {
           <button style={tabStyle("personal")} onClick={() => setTab("personal")}>👤 顧客</button>
           <button style={tabStyle("overall")} onClick={() => setTab("overall")}>📊 全体</button>
           <button style={tabStyle("period")} onClick={() => setTab("period")}>📅 期間</button>
+          <button style={tabStyle("daily")} onClick={() => setTab("daily")}>📆 日別</button>
           <button style={tabStyle("monthly")} onClick={() => setTab("monthly")}>📆 月別</button>
           <button style={tabStyle("graphs")} onClick={() => setTab("graphs")}>📈 グラフ</button>
           <button style={tabStyle("retention")} onClick={() => setTab("retention")}>🔍 リテンション</button>
@@ -489,14 +582,28 @@ export default function App() {
                               delete next[oldName];
                               return next;
                             });
+                            setNgData(prev => {
+                              if (!prev[oldName]) return prev;
+                              const next = { ...prev, [newName]: prev[oldName] };
+                              delete next[oldName];
+                              return next;
+                            });
                             setNameSearch(newName);
                           }}
                         />
                         <div style={{ fontSize: 12, color: "#6b7280" }}>来店 {p.total} 回</div>
                       </div>
-                      <div style={{ marginLeft: "auto", textAlign: "right" }}>
-                        <div style={{ fontSize: 22, fontWeight: 800, color: p.cycle ? "#a78bfa" : "#4b5563" }}>{p.cycle ? `${p.cycle}日` : "—"}</div>
-                        <div style={{ fontSize: 11, color: "#6b7280" }}>平均来店周期</div>
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+                        <div style={{ textAlign: "right" }}>
+                          <div style={{ fontSize: 22, fontWeight: 800, color: p.cycle ? "#a78bfa" : "#4b5563" }}>{p.cycle ? `${p.cycle}日` : "—"}</div>
+                          <div style={{ fontSize: 11, color: "#6b7280" }}>平均来店周期</div>
+                        </div>
+                        <button onClick={() => {
+                          const date = prompt(`${p.name} をNGにする日付を入力（例: 2026-07-01）`);
+                          if (date) setNG(p.name, date);
+                        }} style={{ background: "#7f1d1d", border: "none", borderRadius: 6, padding: "3px 8px", color: "#f87171", fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>
+                          🚫 NG登録
+                        </button>
                       </div>
                     </div>
 
@@ -867,8 +974,193 @@ export default function App() {
                   </tbody>
                 </table>
               </div>
+
+              {/* NG顧客一覧 */}
+              {Object.keys(ngData).length > 0 && (
+                <div style={{ background: "#1a0f0f", borderRadius: 12, padding: 20, border: "1px solid #7f1d1d" }}>
+                  <h3 style={{ margin: "0 0 12px", fontSize: 14, color: "#f87171", fontWeight: 700 }}>🚫 NG顧客一覧</h3>
+                  {Object.entries(ngData).map(([name, info]) => (
+                    <div key={name} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid #2d1a1a" }}>
+                      <div>
+                        <span style={{ fontWeight: 700, fontSize: 14, color: "#f87171" }}>{name}</span>
+                        <span style={{ fontSize: 11, color: "#6b7280", marginLeft: 8 }}>NG日: {info.date}</span>
+                      </div>
+                      <button onClick={() => removeNG(name)}
+                        style={{ background: "#374151", border: "none", borderRadius: 6, padding: "4px 10px", color: "#9ca3af", fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>
+                        解除
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
+
+          {/* 日別カレンダータブ */}
+          {tab === "daily" && (() => {
+            const year = calendarYear;
+            const month = calendarMonth;
+            const firstDay = new Date(year, month, 1);
+            const lastDay = new Date(year, month + 1, 0);
+            const daysInMonth = lastDay.getDate();
+            // 月曜始まり: 月=0,火=1,...日=6
+            const startDow = (firstDay.getDay() + 6) % 7;
+            const weeks = ["月","火","水","木","金","土","日"];
+
+            // 日別データ集計
+            const dayMap = {};
+            activeVisits.forEach(v => {
+              if (!dayMap[v.date]) dayMap[v.date] = [];
+              dayMap[v.date].push(v);
+            });
+
+            const getDayStr = (d) => `${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+
+            const getDayStats = (dateStr) => {
+              const dayVisits = dayMap[dateStr] || [];
+              const frames = dayVisits.reduce((s,v) => s + (getFrames(v.course, v.date)), 0);
+              const pts = dayVisits.filter(v => !v.firstVisit && activeVisits.some(prev => prev.name === v.name && prev.date < v.date))
+                .reduce((s,v) => s + (getPts(v.course, v.date)), 0);
+              const back = dayVisits.reduce((s,v) => s + calcPrices(v.course, v.firstVisit).back, 0);
+              return { dayVisits, frames, pts, back };
+            };
+
+            // 選択日の詳細
+            const selectedStats = selectedDay ? getDayStats(selectedDay) : null;
+
+            // カレンダーグリッド
+            const cells = [];
+            for (let i = 0; i < startDow; i++) cells.push(null);
+            for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+
+            const todayStr = today();
+
+            return (
+              <div>
+                {/* 月ナビゲーション */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                  <button onClick={() => { if (month === 0) { setCalendarMonth(11); setCalendarYear(y => y-1); } else setCalendarMonth(m => m-1); setSelectedDay(null); }}
+                    style={{ background: "#16162a", border: "1px solid #374151", borderRadius: 8, padding: "6px 14px", color: "#9ca3af", cursor: "pointer", fontSize: 16 }}>‹</button>
+                  <span style={{ fontSize: 16, fontWeight: 800, color: "#e2e8f0" }}>{year}年{month+1}月</span>
+                  <button onClick={() => { if (month === 11) { setCalendarMonth(0); setCalendarYear(y => y+1); } else setCalendarMonth(m => m+1); setSelectedDay(null); }}
+                    style={{ background: "#16162a", border: "1px solid #374151", borderRadius: 8, padding: "6px 14px", color: "#9ca3af", cursor: "pointer", fontSize: 16 }}>›</button>
+                </div>
+
+                {/* 月合計 */}
+                {(() => {
+                  const mStr = `${year}-${String(month+1).padStart(2,'0')}`;
+                  const mVisits = activeVisits.filter(v => v.date.startsWith(mStr));
+                  const mFrames = mVisits.reduce((s,v) => s + (getFrames(v.course, v.date)), 0);
+                  const mPts = mVisits.filter(v => !v.firstVisit && activeVisits.some(prev => prev.name === v.name && prev.date < v.date))
+                    .reduce((s,v) => s + (getPts(v.course, v.date)), 0);
+                  const mBack = mVisits.reduce((s,v) => s + calcPrices(v.course, v.firstVisit).back, 0);
+                  return (
+                    <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                      {[
+                        { label: "総枠数", value: mFrames + "枠", color: "#f59e0b" },
+                        { label: "本指名PT", value: mPts + "pt", color: "#a78bfa" },
+                        { label: "給与", value: hideSalary ? "¥●●●" : fmt(mBack), color: "#34d399" },
+                      ].map(c => (
+                        <div key={c.label} style={{ flex: 1, background: "#16162a", borderRadius: 8, padding: "8px 10px", textAlign: "center", border: "1px solid #2d2d44" }}>
+                          <div style={{ fontSize: 9, color: "#6b7280", marginBottom: 2 }}>{c.label}</div>
+                          <div style={{ fontSize: 14, fontWeight: 800, color: c.color }}>{c.value}</div>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+
+                {/* カレンダー */}
+                <div style={{ background: "#16162a", borderRadius: 12, padding: 12, border: "1px solid #2d2d44", marginBottom: 16 }}>
+                  {/* 曜日ヘッダー */}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2, marginBottom: 4 }}>
+                    {weeks.map((w, i) => (
+                      <div key={w} style={{ textAlign: "center", fontSize: 10, color: i === 6 ? "#f87171" : i === 5 ? "#60a5fa" : "#6b7280", padding: "2px 0", fontWeight: 700 }}>{w}</div>
+                    ))}
+                  </div>
+                  {/* 日付グリッド */}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2 }}>
+                    {cells.map((d, idx) => {
+                      if (!d) return <div key={`empty-${idx}`} />;
+                      const dateStr = getDayStr(d);
+                      const { dayVisits, frames, pts, back } = getDayStats(dateStr);
+                      const hasVisit = dayVisits.length > 0;
+                      const isToday = dateStr === todayStr;
+                      const isSelected = dateStr === selectedDay;
+                      const dow = (idx) % 7;
+                      const isSun = dow === 6;
+                      const isSat = dow === 5;
+                      return (
+                        <div key={d} onClick={() => hasVisit && setSelectedDay(isSelected ? null : dateStr)}
+                          style={{
+                            borderRadius: 6, padding: "4px 2px", minHeight: 56, cursor: hasVisit ? "pointer" : "default",
+                            background: isSelected ? "#a78bfa33" : hasVisit ? "#1e1e2e" : "transparent",
+                            border: isToday ? "1px solid #a78bfa" : isSelected ? "1px solid #a78bfa" : "1px solid transparent",
+                            transition: "all 0.2s",
+                          }}>
+                          <div style={{ textAlign: "center", fontSize: 11, fontWeight: isToday ? 800 : 600,
+                            color: isToday ? "#a78bfa" : isSun ? "#f87171" : isSat ? "#60a5fa" : "#9ca3af", marginBottom: 2 }}>
+                            {d}
+                          </div>
+                          {hasVisit && (
+                            <div style={{ textAlign: "center" }}>
+                              <div style={{ fontSize: 9, color: "#f59e0b", fontWeight: 700 }}>{frames}枠</div>
+                              <div style={{ fontSize: 9, color: "#a78bfa" }}>{pts}pt</div>
+                              <div style={{ fontSize: 9, color: "#34d399" }}>{hideSalary ? "●●●" : `¥${Math.round(back/1000)}k`}</div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 選択日の詳細 */}
+                {selectedDay && selectedStats && (
+                  <div style={{ background: "#16162a", borderRadius: 12, padding: 20, border: "1px solid #2d2d44" }}>
+                    <h3 style={{ margin: "0 0 12px", fontSize: 14, color: "#a78bfa", fontWeight: 700 }}>{selectedDay}の来店詳細</h3>
+                    {/* 合計 */}
+                    <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+                      {[
+                        { label: "枠数", value: selectedStats.frames + "枠", color: "#f59e0b" },
+                        { label: "本指名PT", value: selectedStats.pts + "pt", color: "#a78bfa" },
+                        { label: "給与合計", value: hideSalary ? "¥●●●" : fmt(selectedStats.back), color: "#34d399" },
+                      ].map(c => (
+                        <div key={c.label} style={{ flex: 1, background: "#0f0f1a", borderRadius: 8, padding: "8px 10px", textAlign: "center" }}>
+                          <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 3 }}>{c.label}</div>
+                          <div style={{ fontSize: 16, fontWeight: 800, color: c.color }}>{c.value}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {/* 顧客別 */}
+                    {selectedStats.dayVisits.map(v => {
+                      const prices = calcPrices(v.course, v.firstVisit);
+                      const isHon = !v.firstVisit && activeVisits.some(prev => prev.name === v.name && prev.date < v.date);
+                      const vPts = isHon ? (getPts(v.course, v.date)) : 0;
+                      return (
+                        <div key={v.id} style={{ padding: "10px 0", borderBottom: "1px solid #0f0f1a" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                            <div>
+                              <span style={{ fontWeight: 700, fontSize: 14 }}>{v.name}</span>
+                              {v.firstVisit && <span style={{ fontSize: 10, color: "#f59e0b", marginLeft: 6 }}>初指名</span>}
+                              {isHon && <span style={{ fontSize: 10, color: "#a78bfa", marginLeft: 6 }}>本指名</span>}
+                            </div>
+                            <span style={{ background: COURSE_COLORS[v.course] + "33", color: COURSE_COLORS[v.course], borderRadius: 5, padding: "2px 8px", fontSize: 12, fontWeight: 700 }}>{v.course}</span>
+                          </div>
+                          <div style={{ display: "flex", gap: 12, fontSize: 12 }}>
+                            <span style={{ color: "#f59e0b" }}>{getFrames(v.course, v.date)}枠</span>
+                            <span style={{ color: "#a78bfa" }}>{vPts}pt</span>
+                            <span style={{ color: "#34d399" }}>{hideSalary ? "¥●●●" : fmt(prices.client)}</span>
+                            <span style={{ color: "#a78bfa" }}>{hideSalary ? "¥●●●" : fmt(prices.back)}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* 期間分析タブ */}
           {tab === "period" && (
@@ -941,7 +1233,7 @@ export default function App() {
                 const totalBack = inPeriod.reduce((sum, v) => sum + calcPrices(v.course, v.firstVisit).back, 0);
 
                 // 枠数集計
-                const totalFrames = inPeriod.reduce((sum, v) => sum + (COURSE_PRICES[v.course]?.frames || 0), 0);
+                const totalFrames = inPeriod.reduce((sum, v) => sum + (getFrames(v.course, v.date)), 0);
 
                 // 本指名ポイント（初指名除く・その来店日より前に来店歴がある顧客のみ）
                 const totalPts = inPeriod
@@ -949,7 +1241,7 @@ export default function App() {
                     if (v.firstVisit) return false;
                     return visits.some(prev => prev.name === v.name && prev.date < v.date);
                   })
-                  .reduce((sum, v) => sum + (COURSE_PRICES[v.course]?.pts || 0), 0);
+                  .reduce((sum, v) => sum + (getPts(v.course, v.date)), 0);
 
                 // 複数回来店した人
                 const visitCountByName = {};
@@ -976,7 +1268,7 @@ export default function App() {
                             if (v.firstVisit) return false;
                             return visits.some(prev => prev.name === v.name && prev.date < v.date);
                           })
-                          .reduce((sum, v) => sum + (COURSE_PRICES[v.course]?.frames || 0), 0);
+                          .reduce((sum, v) => sum + (getFrames(v.course, v.date)), 0);
                         return [
                           { label: "来店客数", value: uniqueNames.length + "名", icon: "👥", color: "#ec4899", sub: [
                               { label: "新規", value: newCustomers.length + "名", color: "#34d399" },
@@ -1084,8 +1376,8 @@ export default function App() {
                         </div>
                       </div>
                       {(() => {
-                        const newFrames = newVisits.reduce((sum, v) => sum + (COURSE_PRICES[v.course]?.frames || 0), 0);
-                        const existFrames = existVisits.reduce((sum, v) => sum + (COURSE_PRICES[v.course]?.frames || 0), 0);
+                        const newFrames = newVisits.reduce((sum, v) => sum + (getFrames(v.course, v.date)), 0);
+                        const existFrames = existVisits.reduce((sum, v) => sum + (getFrames(v.course, v.date)), 0);
                         const totalF = newFrames + existFrames;
                         return (
                           <>
@@ -1161,14 +1453,14 @@ export default function App() {
                             <div style={{ fontSize: 10, color: "#4b5563", textAlign: "center" }}>本指名PT</div>
                             {days.map(([date, dayVisits]) => {
                               const people = [...new Set(dayVisits.map(v => v.name))].length;
-                              const frames = dayVisits.reduce((s, v) => s + (COURSE_PRICES[v.course]?.frames || 0), 0);
+                              const frames = dayVisits.reduce((s, v) => s + (getFrames(v.course, v.date)), 0);
                               const pts = dayVisits
                                 .filter(v => {
                                   if (v.firstVisit) return false;
                                   // その日より前に来店歴があるか
                                   return visits.some(prev => prev.name === v.name && prev.date < date);
                                 })
-                                .reduce((s, v) => s + (COURSE_PRICES[v.course]?.pts || 0), 0);
+                                .reduce((s, v) => s + (getPts(v.course, v.date)), 0);
                               return (
                                 <React.Fragment key={date}>
                                   <div style={{ fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{date}</div>
@@ -1323,11 +1615,11 @@ export default function App() {
               // 来店単位の新規/既存枠数
               const mvNewVisits = mv.filter(v => !visits.some(prev => prev.name === v.name && prev.date < v.date));
               const mvExistVisits = mv.filter(v => visits.some(prev => prev.name === v.name && prev.date < v.date));
-              const frames = mv.reduce((s,v) => s + (COURSE_PRICES[v.course]?.frames || 0), 0);
+              const frames = mv.reduce((s,v) => s + (getFrames(v.course, v.date)), 0);
               const pts = mv.filter(v => {
                 if (v.firstVisit) return false;
                 return visits.some(prev => prev.name === v.name && prev.date < v.date);
-              }).reduce((s,v) => s + (COURSE_PRICES[v.course]?.pts || 0), 0);
+              }).reduce((s,v) => s + (getPts(v.course, v.date)), 0);
               const client = mv.reduce((s,v) => s + calcPrices(v.course, v.firstVisit).client, 0);
               const back = mv.reduce((s,v) => s + calcPrices(v.course, v.firstVisit).back, 0);
               // 来店回数別（その月にN回目来店した人数）
@@ -1383,8 +1675,9 @@ export default function App() {
 
                       {/* 数値グリッド */}
                       {(() => {
-                        const mvNewFrames = monthMap[s.m].filter(v => !visits.some(prev => prev.name === v.name && prev.date < v.date)).reduce((sum,v) => sum + (COURSE_PRICES[v.course]?.frames||0), 0);
+                        const mvNewFrames = monthMap[s.m].filter(v => !visits.some(prev => prev.name === v.name && prev.date < v.date)).reduce((sum,v) => sum + (getFrames(v.course, v.date)), 0);
                         const mvExistFrames = s.frames - mvNewFrames;
+                        const honRate = s.frames > 0 ? Math.round(mvExistFrames / s.frames * 100) : 0;
                         const cards = [
                           { label: "来店客数", value: s.people + "名", color: "#ec4899", sub: [
                             { label: "新規", value: s.newCount + "名", color: "#34d399" },
@@ -1394,6 +1687,7 @@ export default function App() {
                             { label: "新規", value: mvNewFrames + "枠", color: "#34d399" },
                             { label: "本指名", value: mvExistFrames + "枠", color: "#a78bfa" },
                           ]},
+                          { label: "本指名率（枠数）", value: honRate + "%", color: honRate >= 70 ? "#34d399" : honRate >= 50 ? "#f59e0b" : "#f87171" },
                           { label: "本指名PT", value: s.pts + "pt", color: "#a78bfa" },
                           { label: "給与", value: hideSalary ? "¥●●●,●●●" : fmt(s.back), color: "#34d399",
                             sub: diffBack !== null ? [{ label: diffBack >= 0 ? "▲前月比" : "▼前月比", value: hideSalary ? "●●●" : fmt(Math.abs(diffBack)), color: diffBack >= 0 ? "#34d399" : "#f87171" }] : null },
@@ -1463,7 +1757,7 @@ export default function App() {
                         const existPct = 100 - newPct;
                         const mv = monthMap[s.m];
                         const newFrames = mv.filter(v => !visits.some(prev => prev.name === v.name && prev.date < v.date))
-                          .reduce((sum,v) => sum + (COURSE_PRICES[v.course]?.frames || 0), 0);
+                          .reduce((sum,v) => sum + (getFrames(v.course, v.date)), 0);
                         const existFrames = s.frames - newFrames;
                         const newFPct = s.frames > 0 ? Math.round(newFrames / s.frames * 100) : 0;
                         const existFPct = 100 - newFPct;
@@ -1514,12 +1808,13 @@ export default function App() {
                             const daysSince = daysBetween(lastVisit, today_);
                             const ratio = cycle ? Math.round(daysSince / cycle * 10) / 10 : null;
                             const prevVisitsForName = (monthMap[prevM] || []).filter(v => v.name === name);
-                            const prevFrames = prevVisitsForName.reduce((s,v) => s + (COURSE_PRICES[v.course]?.frames||0), 0);
+                            const prevFrames = prevVisitsForName.reduce((s,v) => s + (getFrames(v.course, v.date)), 0);
                             const prevPts = prevVisitsForName.filter(v => !v.firstVisit && visits.some(prev => prev.name === v.name && prev.date < v.date))
-                              .reduce((s,v) => s + (COURSE_PRICES[v.course]?.pts||0), 0);
+                              .reduce((s,v) => s + (getPts(v.course, v.date)), 0);
                             const allMonthKeys = Object.keys(monthMap).sort();
                             const prevIdx = allMonthKeys.indexOf(prevM);
-                            const consecutive3 = prevIdx >= 2 && allMonthKeys.slice(prevIdx-2, prevIdx+1).every(m => (monthMap[m]||[]).some(v => v.name === name));
+                            const consecutive3 = prevIdx >= 2 && allMonthKeys.slice(prevIdx-2, prevIdx+1).every(m => (monthMap[m]||[]).some(v => v.name === name))
+                              && ratio !== null && ratio >= 1; // 平均周期を超えている場合のみ
                             let status = null, statusColor = "#6b7280";
                             if (ratio !== null) {
                               if (ratio >= 2) { status = "危険"; statusColor = "#f87171"; }
@@ -1606,6 +1901,67 @@ export default function App() {
                           </div>
                         );
                       })()}
+
+                      {/* 来店見込み客 */}
+                      {(() => {
+                        if (i >= monthStats.length - 1) return null;
+                        const prevS = monthStats[i + 1];
+                        const prevM = prevS.m;
+                        const targetVisitors = new Set((monthMap[s.m] || []).map(v => v.name));
+                        const prevVisitors = [...new Set((monthMap[prevM] || []).map(v => v.name))];
+                        const today_ = today();
+
+                        // 前月来店・今月未来店・周期未超過の人
+                        const expectedList = prevVisitors
+                          .filter(name => !targetVisitors.has(name) && !ngData[name])
+                          .map(name => {
+                            const allForName = visits.filter(v => v.name === name).sort((a,b) => new Date(a.date)-new Date(b.date));
+                            const cycle = avgCycleDays(allForName);
+                            const lastVisit = allForName[allForName.length - 1]?.date;
+                            if (!lastVisit || !cycle) return null;
+                            const daysSince = daysBetween(lastVisit, today_);
+                            const ratio = daysSince / cycle;
+                            if (ratio >= 1) return null; // 周期超過は除外
+                            const daysLeft = cycle - daysSince;
+                            return { name, cycle, lastVisit, daysSince, daysLeft, ratio };
+                          })
+                          .filter(Boolean)
+                          .sort((a,b) => a.daysLeft - b.daysLeft); // 来店が近い順
+
+                        if (expectedList.length === 0) return null;
+                        const isOpenExpected = expandedAbsent[s.m + '_expected'];
+
+                        return (
+                          <div style={{ marginTop: 10, borderTop: "1px solid #2d2d44", paddingTop: 10 }}>
+                            <button onClick={() => setExpandedAbsent(prev => ({ ...prev, [s.m + '_expected']: !prev[s.m + '_expected'] }))}
+                              style={{ width: "100%", background: "none", border: "none", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", padding: 0, fontFamily: "inherit" }}>
+                              <span style={{ fontSize: 12, fontWeight: 700, color: "#34d399" }}>
+                                🎯 来店見込み客 {expectedList.length}名
+                              </span>
+                              <span style={{ fontSize: 11, color: "#6b7280" }}>{isOpenExpected ? "▲" : "▼"}</span>
+                            </button>
+                            {isOpenExpected && (
+                              <div style={{ marginTop: 10 }}>
+                                {expectedList.map(p => (
+                                  <div key={p.name} style={{ padding: "8px 0", borderBottom: "1px solid #0f0f1a" }}>
+                                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                                      <span style={{ fontWeight: 700, fontSize: 13 }}>{p.name}</span>
+                                      <span style={{ fontSize: 12, fontWeight: 700, color: p.daysLeft <= 3 ? "#f59e0b" : "#34d399" }}>
+                                        あと{p.daysLeft}日
+                                      </span>
+                                    </div>
+                                    <div style={{ display: "flex", gap: 8, fontSize: 11, color: "#6b7280" }}>
+                                      <span>最終: {p.lastVisit}</span>
+                                      <span>{p.daysSince}日経過</span>
+                                      <span>周期: {p.cycle}日</span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                   );
                 })}
@@ -1635,7 +1991,7 @@ export default function App() {
               const pts = mv.filter(v => {
                 if (v.firstVisit) return false;
                 return visits.some(prev => prev.name === v.name && prev.date < v.date);
-              }).reduce((s,v) => s + (COURSE_PRICES[v.course]?.pts || 0), 0);
+              }).reduce((s,v) => s + (getPts(v.course, v.date)), 0);
               return { m, people: uniqueN.length, newCount: newC.length, honshimei, pts };
             });
 
