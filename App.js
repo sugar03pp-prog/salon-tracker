@@ -55,12 +55,9 @@ const COURSE_PRICES = {
   "600分": { client: 360000, back: 222000, frames: 6, pts: 60 },
 };
 
-const NEW_RULE_DATE = "2026-08-15"; // この日以降は200分以上=1枠
-
 function getFrames(course, visitDate) {
   const base = COURSE_PRICES[course];
   if (!base) return 0;
-  if (visitDate >= NEW_RULE_DATE && base.frames >= 2) return 1;
   return base.frames;
 }
 
@@ -487,7 +484,7 @@ export default function App() {
                         初指名（-¥2,000）
                       </label>
                       {(() => {
-                        const p = calcPrices(form.course, form.firstVisit, form.date);
+                        const p = calcPrices(form.course, form.firstVisit, form.date || today());
                         return (
                           <div style={{ fontSize: 11, color: "#6b7280", lineHeight: 1.6 }}>
                             客払 <span style={{ color: "#34d399", fontWeight: 700 }}>{fmt(p.client)}</span>　給与 <span style={{ color: "#a78bfa", fontWeight: 700 }}>{fmt(p.back)}</span>
