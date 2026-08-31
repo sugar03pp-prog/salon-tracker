@@ -55,12 +55,9 @@ const COURSE_PRICES = {
   "600分": { client: 360000, back: 222000, frames: 6, pts: 60 },
 };
 
-const NEW_RULE_DATE = "2026-08-15"; // この日以降は200分以上=1枠
-
 function getFrames(course, visitDate) {
   const base = COURSE_PRICES[course];
   if (!base) return 0;
-  if (visitDate >= NEW_RULE_DATE && base.frames >= 2) return 1;
   return base.frames;
 }
 
