@@ -1,5 +1,4 @@
-import React, { useState, useMemo, useEffect } from "react"; // updated
-
+import React, { useState, useMemo, useEffect } from "react";
 
 const COURSES = [
   "100分","130分","200分","230分","260分","300分","330分",
