@@ -422,6 +422,7 @@ export default function App() {
           <button style={tabStyle("monthly")} onClick={() => setTab("monthly")}>📆 月別</button>
           <button style={tabStyle("graphs")} onClick={() => setTab("graphs")}>📈 グラフ</button>
           <button style={tabStyle("retention")} onClick={() => setTab("retention")}>🔍 リテンション</button>
+          <button style={tabStyle("yearly")} onClick={() => setTab("yearly")}>📅 年間</button>
         </div>
         <div style={{ background: "#1e1e2e", borderRadius: "0 8px 8px 8px", padding: 24 }}>
 
@@ -2391,6 +2392,239 @@ export default function App() {
                     </div>
                   ))}
                 </div>
+              </div>
+            );
+          })()}
+
+          {/* 年間集計タブ */}
+          {tab === "yearly" && (() => {
+            const allYears = [...new Set(visits.map(v => v.date.slice(0,4)))].sort().reverse();
+            const defaultYear = allYears[0] || String(new Date().getFullYear());
+            const [selYear, setSelYear] = React.useState(defaultYear);
+            const activeVisits = visits.filter(v => {
+              const ng = ngData[v.name];
+              if (ng && v.date >= ng.date) return false;
+              return true;
+            });
+            const yearVisits = activeVisits.filter(v => v.date.startsWith(selYear));
+
+            // 月別集計
+            const monthRows = [];
+            for (let m = 1; m <= 12; m++) {
+              const key = `${selYear}-${String(m).padStart(2,"0")}`;
+              const mv = yearVisits.filter(v => v.date.slice(0,7) === key);
+              const frames = mv.reduce((s,v) => s + getFrames(v.course, v.date), 0);
+              const pts = mv.filter(v => {
+                if (v.firstVisit) return false;
+                return activeVisits.some(prev => prev.name === v.name && prev.date < v.date);
+              }).reduce((s,v) => s + getPts(v.course, v.date), 0);
+              const back = mv.reduce((s,v) => s + calcPrices(v.course, v.firstVisit, v.date).back, 0);
+              const client = mv.reduce((s,v) => s + calcPrices(v.course, v.firstVisit, v.date).client, 0);
+              const newNames = [...new Set(mv.filter(v => {
+                const allForName = activeVisits.filter(vv => vv.name === v.name).sort((a,b) => new Date(a.date)-new Date(b.date));
+                return allForName[0]?.date.slice(0,7) === key;
+              }).map(v => v.name))];
+              const newRepeat = newNames.filter(name =>
+                activeVisits.some(v2 => v2.name === name && v2.date > `${key}-31`)
+              ).length;
+              monthRows.push({ m, key, count: mv.length, frames, pts, back, client, newC: newNames.length, newRepeat });
+            }
+            const totalRow = {
+              count: monthRows.reduce((s,r)=>s+r.count,0),
+              frames: monthRows.reduce((s,r)=>s+r.frames,0),
+              pts: monthRows.reduce((s,r)=>s+r.pts,0),
+              back: monthRows.reduce((s,r)=>s+r.back,0),
+              client: monthRows.reduce((s,r)=>s+r.client,0),
+              newC: monthRows.reduce((s,r)=>s+r.newC,0),
+            };
+
+            // ランキング
+            const nameCountMap = {};
+            const nameClientMap = {};
+            yearVisits.forEach(v => {
+              nameCountMap[v.name] = (nameCountMap[v.name] || 0) + 1;
+              nameClientMap[v.name] = (nameClientMap[v.name] || 0) + calcPrices(v.course, v.firstVisit, v.date).client;
+            });
+            const visitRanking = Object.entries(nameCountMap).sort((a,b)=>b[1]-a[1]).slice(0,10);
+            const clientRanking = Object.entries(nameClientMap).sort((a,b)=>b[1]-a[1]).slice(0,10);
+
+            // コース別集計
+            const courseMap = {};
+            yearVisits.forEach(v => { courseMap[v.course] = (courseMap[v.course] || 0) + 1; });
+            const courseSorted = Object.entries(courseMap).sort((a,b)=>b[1]-a[1]);
+
+            const cellStyle = { padding: "7px 8px", textAlign: "center", fontSize: 12, borderBottom: "1px solid #16162a" };
+            const headStyle = { padding: "6px 8px", textAlign: "center", fontSize: 10, color: "#6b7280", fontWeight: 600, borderBottom: "1px solid #2d2d44" };
+
+            return (
+              <div>
+                {/* 年選択 */}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 12, color: "#9ca3af" }}>年を選択：</span>
+                  {allYears.map(y => (
+                    <button key={y} onClick={() => setSelYear(y)}
+                      style={{ background: selYear === y ? "linear-gradient(135deg,#a78bfa,#ec4899)" : "#16162a", border: selYear === y ? "none" : "1px solid #374151", borderRadius: 8, padding: "6px 14px", color: selYear === y ? "#fff" : "#9ca3af", fontSize: 13, fontWeight: selYear === y ? 700 : 400, cursor: "pointer", fontFamily: "inherit" }}>
+                      {y}年
+                    </button>
+                  ))}
+                </div>
+
+                {yearVisits.length === 0 ? (
+                  <div style={{ textAlign: "center", color: "#4b5563", padding: 40, fontSize: 14 }}>{selYear}年のデータがありません</div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+
+                    {/* 年間サマリー */}
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
+                      {[
+                        { label: "総来店数", value: totalRow.count + "件", color: "#ec4899" },
+                        { label: "総枠数", value: totalRow.frames + "枠", color: "#f59e0b" },
+                        { label: "本指名PT", value: totalRow.pts + "pt", color: "#a78bfa" },
+                        { label: "新規客数", value: totalRow.newC + "名", color: "#34d399" },
+                        { label: "総客払い", value: hideSalary ? "¥●●●" : fmt(totalRow.client), color: "#6366f1" },
+                        { label: "総給与", value: hideSalary ? "¥●●●" : fmt(totalRow.back), color: "#34d399" },
+                      ].map(c => (
+                        <div key={c.label} style={{ background: "#16162a", borderRadius: 10, padding: "12px 10px", border: "1px solid #2d2d44", textAlign: "center" }}>
+                          <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 4 }}>{c.label}</div>
+                          <div style={{ fontSize: 15, fontWeight: 800, color: c.color }}>{c.value}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* 月別一覧テーブル */}
+                    <div style={{ background: "#16162a", borderRadius: 12, padding: 16, border: "1px solid #2d2d44" }}>
+                      <h3 style={{ margin: "0 0 12px", fontSize: 13, color: "#a78bfa", fontWeight: 700 }}>📊 月別一覧</h3>
+                      <div style={{ overflowX: "auto" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 360 }}>
+                          <thead>
+                            <tr>
+                              <th style={{ ...headStyle, textAlign: "left" }}>月</th>
+                              <th style={headStyle}>来店</th>
+                              <th style={headStyle}>枠数</th>
+                              <th style={headStyle}>指名PT</th>
+                              <th style={headStyle}>新規</th>
+                              <th style={headStyle}>給与</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {monthRows.map(r => (
+                              <tr key={r.m} style={{ opacity: r.count === 0 ? 0.35 : 1 }}>
+                                <td style={{ ...cellStyle, textAlign: "left", color: "#9ca3af", fontWeight: 600 }}>{r.m}月</td>
+                                <td style={{ ...cellStyle, color: "#e2e8f0" }}>{r.count > 0 ? r.count : "−"}</td>
+                                <td style={{ ...cellStyle, color: "#f59e0b" }}>{r.frames > 0 ? r.frames : "−"}</td>
+                                <td style={{ ...cellStyle, color: "#a78bfa" }}>{r.pts > 0 ? r.pts : "−"}</td>
+                                <td style={{ ...cellStyle, color: "#34d399" }}>{r.newC > 0 ? r.newC + "名" : "−"}</td>
+                                <td style={{ ...cellStyle, color: "#34d399", fontSize: 11 }}>{r.back > 0 ? (hideSalary ? "●●●" : fmt(r.back)) : "−"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                          <tfoot>
+                            <tr style={{ borderTop: "2px solid #2d2d44" }}>
+                              <td style={{ ...cellStyle, textAlign: "left", fontWeight: 700, color: "#e2e8f0" }}>合計</td>
+                              <td style={{ ...cellStyle, fontWeight: 800, color: "#ec4899" }}>{totalRow.count}</td>
+                              <td style={{ ...cellStyle, fontWeight: 800, color: "#f59e0b" }}>{totalRow.frames}</td>
+                              <td style={{ ...cellStyle, fontWeight: 800, color: "#a78bfa" }}>{totalRow.pts}</td>
+                              <td style={{ ...cellStyle, fontWeight: 800, color: "#34d399" }}>{totalRow.newC}名</td>
+                              <td style={{ ...cellStyle, fontWeight: 800, color: "#34d399", fontSize: 11 }}>{hideSalary ? "●●●" : fmt(totalRow.back)}</td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    </div>
+
+                    {/* 来店数ランキング */}
+                    <div style={{ background: "#16162a", borderRadius: 12, padding: 16, border: "1px solid #2d2d44" }}>
+                      <h3 style={{ margin: "0 0 12px", fontSize: 13, color: "#a78bfa", fontWeight: 700 }}>🏆 来店数ランキング Top10</h3>
+                      {visitRanking.map(([name, cnt], i) => (
+                        <div key={name} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: i===0?"#f59e0b":i===1?"#9ca3af":i===2?"#cd7c2f":"#4b5563", minWidth: 18, textAlign: "right" }}>{i+1}</span>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                              <span style={{ fontSize: 13, fontWeight: 600, color: "#e2e8f0" }}>{name}</span>
+                              <span style={{ fontSize: 13, fontWeight: 700, color: "#ec4899" }}>{cnt}回</span>
+                            </div>
+                            <div style={{ background: "#0f0f1a", borderRadius: 3, height: 5, overflow: "hidden" }}>
+                              <div style={{ width: `${cnt/visitRanking[0][1]*100}%`, background: "linear-gradient(90deg,#a78bfa,#ec4899)", height: "100%", borderRadius: 3 }} />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* 使用金額ランキング */}
+                    <div style={{ background: "#16162a", borderRadius: 12, padding: 16, border: "1px solid #2d2d44" }}>
+                      <h3 style={{ margin: "0 0 12px", fontSize: 13, color: "#a78bfa", fontWeight: 700 }}>💰 使用金額ランキング Top10</h3>
+                      {clientRanking.map(([name, total], i) => (
+                        <div key={name} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: i===0?"#f59e0b":i===1?"#9ca3af":i===2?"#cd7c2f":"#4b5563", minWidth: 18, textAlign: "right" }}>{i+1}</span>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                              <span style={{ fontSize: 13, fontWeight: 600, color: "#e2e8f0" }}>{name}</span>
+                              <span style={{ fontSize: 12, fontWeight: 700, color: "#34d399" }}>{hideSalary ? "¥●●●,●●●" : fmt(total)}</span>
+                            </div>
+                            <div style={{ background: "#0f0f1a", borderRadius: 3, height: 5, overflow: "hidden" }}>
+                              <div style={{ width: `${total/clientRanking[0][1]*100}%`, background: "linear-gradient(90deg,#34d399,#6366f1)", height: "100%", borderRadius: 3 }} />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* 新規客月別推移と再来率 */}
+                    <div style={{ background: "#16162a", borderRadius: 12, padding: 16, border: "1px solid #2d2d44" }}>
+                      <h3 style={{ margin: "0 0 4px", fontSize: 13, color: "#a78bfa", fontWeight: 700 }}>🌱 新規客 月別推移と再来率</h3>
+                      <p style={{ margin: "0 0 12px", fontSize: 11, color: "#4b5563" }}>その月に初来店した人が翌月以降に再来店したか</p>
+                      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                        <thead>
+                          <tr>
+                            <th style={{ ...headStyle, textAlign: "left" }}>月</th>
+                            <th style={headStyle}>新規</th>
+                            <th style={headStyle}>再来済</th>
+                            <th style={headStyle}>再来率</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {monthRows.filter(r => r.newC > 0).map(r => {
+                            const rate = r.newC > 0 ? Math.round(r.newRepeat/r.newC*100) : 0;
+                            const isFutureOrCurrent = r.key >= new Date().toISOString().slice(0,7);
+                            return (
+                              <tr key={r.m}>
+                                <td style={{ ...cellStyle, textAlign: "left", color: "#9ca3af" }}>{r.m}月</td>
+                                <td style={{ ...cellStyle, color: "#34d399", fontWeight: 700 }}>{r.newC}名</td>
+                                <td style={{ ...cellStyle, color: "#a78bfa" }}>{isFutureOrCurrent ? "−" : r.newRepeat+"名"}</td>
+                                <td style={{ ...cellStyle }}>
+                                  {isFutureOrCurrent ? <span style={{ color: "#4b5563" }}>集計中</span> : (
+                                    <span style={{ fontWeight: 700, color: rate>=70?"#34d399":rate>=40?"#f59e0b":"#f87171" }}>{rate}%</span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          {monthRows.every(r => r.newC === 0) && (
+                            <tr><td colSpan={4} style={{ ...cellStyle, color: "#4b5563" }}>新規客データがありません</td></tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* コース別件数 */}
+                    <div style={{ background: "#16162a", borderRadius: 12, padding: 16, border: "1px solid #2d2d44" }}>
+                      <h3 style={{ margin: "0 0 12px", fontSize: 13, color: "#a78bfa", fontWeight: 700 }}>📋 コース別件数</h3>
+                      {courseSorted.map(([course, cnt]) => (
+                        <div key={course} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: COURSE_COLORS[course], minWidth: 44 }}>{course}</span>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ background: "#0f0f1a", borderRadius: 3, height: 8, overflow: "hidden" }}>
+                              <div style={{ width: `${cnt/courseSorted[0][1]*100}%`, background: COURSE_COLORS[course]+"cc", height: "100%", borderRadius: 3 }} />
+                            </div>
+                          </div>
+                          <span style={{ fontSize: 12, color: "#9ca3af", minWidth: 28, textAlign: "right" }}>{cnt}件</span>
+                        </div>
+                      ))}
+                    </div>
+
+                  </div>
+                )}
               </div>
             );
           })()}
