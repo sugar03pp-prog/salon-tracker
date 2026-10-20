@@ -242,6 +242,7 @@ export default function App() {
   const [graphStart, setGraphStart] = useState("");
   const [graphEnd, setGraphEnd] = useState("");
   const [expandedAbsent, setExpandedAbsent] = useState({});
+  const [yearlySelYear, setYearlySelYear] = useState("");
   const [calendarYear, setCalendarYear] = useState(new Date().getFullYear());
   const [calendarMonth, setCalendarMonth] = useState(new Date().getMonth());
   const [selectedDay, setSelectedDay] = useState(null);
@@ -2399,8 +2400,8 @@ export default function App() {
           {/* 年間集計タブ */}
           {tab === "yearly" && (() => {
             const allYears = [...new Set(visits.map(v => v.date.slice(0,4)))].sort().reverse();
-            const defaultYear = allYears[0] || String(new Date().getFullYear());
-            const [selYear, setSelYear] = React.useState(defaultYear);
+            const selYear = yearlySelYear || allYears[0] || String(new Date().getFullYear());
+            const setSelYear = setYearlySelYear;
             const activeVisits = visits.filter(v => {
               const ng = ngData[v.name];
               if (ng && v.date >= ng.date) return false;
